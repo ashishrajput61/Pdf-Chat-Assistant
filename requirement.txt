@@ -10,8 +10,6 @@ python-dotenv
 faiss-cpu
 pypdf
 tiktoken
-unicorn
-fastapi
 requests
 streamlit==1.39.0
 langchain-text-splitters==0.0.1

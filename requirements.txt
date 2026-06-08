@@ -14,7 +14,7 @@ unicorn
 fastapi
 requests
 streamlit==1.39.0
-langchain-text-splitters==0.0.1
-chromadb==0.4.24
-pydantic==2.6.4
-
+langchain-text-splitters>=0.3.0
+chromadb==0.5.23
+pydantic>=2.7.0,<3.0.0
+tiktoken>=0.7.0

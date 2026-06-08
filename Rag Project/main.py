@@ -1,3 +1,5 @@
+
+
 from langchain_mistralai import MistralAIEmbeddings, ChatMistralAI
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate
@@ -5,41 +7,44 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Embedding model
+PERSIST_DIR = "chroma-DB"
+
+
+print("Loading models...")
 embedding_model = MistralAIEmbeddings()
 
-# Load vector database
 vectorstore = Chroma(
-    persist_directory="chroma-DB",
-    embedding_function=embedding_model
+    persist_directory=PERSIST_DIR,
+    embedding_function=embedding_model,
 )
 
-#Retriever
+total = vectorstore._collection.count()
+if total == 0:
+    print(
+        " Chroma DB is empty. Run database.py first:\n"
+        "   python database.py --pdf your_file.pdf"
+    )
+    exit(1)
+
+print(f" Loaded Chroma DB with {total} chunks.")
+
 retriever = vectorstore.as_retriever(
     search_type="mmr",
-    search_kwargs={
-        "k": 4,
-        "fetch_k": 10,
-        "lambda_mult": 0.5   # corrected spelling
-    }
+    search_kwargs={"k": 4, "fetch_k": 10, "lambda_mult": 0.5},
 )
 
-# print("Total vectors in DB:", vectorstore._collection.count())
+llm = ChatMistralAI(model="mistral-small-latest", temperature=0.3)
 
-# LLM
-llm = ChatMistralAI(model="mistral-small-2506")
 
-# Prompt template
 prompt = ChatPromptTemplate.from_messages([
     (
         "system",
         """You are a helpful AI Assistant.
 
 Use only the provided context to answer the question.
-
 If the answer is not present in the context,
 say: "I could not find the answer in the document."
-"""
+""",
     ),
     (
         "human",
@@ -47,37 +52,31 @@ say: "I could not find the answer in the document."
 {context}
 
 Question:
-{question}
-"""
-    )
+{question}""",
+    ),
 ])
 
-print("RAG System created.")
-print("Press 0 to Exit.")
+print("\n RAG Chat ready. Type your question or press 0 to exit.\n")
 
 while True:
-    query = input("You: ")
+    query = input("You: ").strip()
 
     if query == "0":
         print("Exiting...")
         break
 
-    # Retrieve relevant documents
+    if not query:
+        continue
+
     docs = retriever.invoke(query)
-    print(f"\nRetrieved {len(docs)} documents.\n")
+
     if not docs:
-        print("\nAI: No relevant documents found.")
+        print("\nAI: No relevant documents found.\n")
+        continue
 
-    # Combine retrieved context
-    context = "\n\n".join([doc.page_content for doc in docs])
+    context = "\n\n".join(doc.page_content for doc in docs)
 
-    # Create prompt
-    final_prompt = prompt.invoke({
-        "context": context,
-        "question": query
-    })
-
-    # Generate response
+    final_prompt = prompt.invoke({"context": context, "question": query})
     response = llm.invoke(final_prompt)
 
     print(f"\nAI: {response.content}\n")

@@ -98,9 +98,17 @@ def answer_query(question: str, vectorstore):
 
 
 # ── Session state defaults ────────────────────────────────────────────────────
-for key in ["messages", "vectorstore", "pdf_names", "uploaded_files_data"]:
-    if key not in st.session_state:
-        st.session_state[key] = [] if key in ("messages", "pdf_names") else None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
+if "pdf_names" not in st.session_state:
+    st.session_state.pdf_names = []
+if "uploaded_files_data" not in st.session_state:
+    st.session_state.uploaded_files_data = None
+# uploader_key: incrementing this forces the file_uploader widget to fully reset
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="PDF Chat Assistant", page_icon="📄", layout="wide")
@@ -110,23 +118,21 @@ st.caption("Answers come from your document when possible, or from AI knowledge 
 with st.sidebar:
     st.header("📁 Upload PDFs")
 
-    # Use a key so we can detect new uploads
+    # Dynamic key — when incremented, Streamlit treats this as a brand new widget (fully empty)
     uploaded_files = st.file_uploader(
         "Upload one or more PDFs",
         type="pdf",
         accept_multiple_files=True,
-        key="file_uploader",
+        key=f"file_uploader_{st.session_state.uploader_key}",
     )
 
-    # Save uploaded files to session state immediately when user picks them
+    # Save to session state as soon as user selects files
     if uploaded_files:
         st.session_state.uploaded_files_data = uploaded_files
 
-    # Show Process button only when files are available (either just picked or previously stored)
     files_to_process = st.session_state.uploaded_files_data
 
     if files_to_process:
-        # Show the names of currently selected/stored files so user knows they're still there
         st.markdown("**Selected files:**")
         for f in files_to_process:
             st.markdown(f"- 📄 {f.name}")
@@ -139,11 +145,12 @@ with st.sidebar:
                 else:
                     st.session_state.vectorstore = build_vectorstore(raw_text)
                     st.session_state.pdf_names = [f.name for f in files_to_process]
-                    # Clear the file selection box after processing
+                    # Clear stored files + bump key so uploader widget resets to empty
                     st.session_state.uploaded_files_data = None
+                    st.session_state.uploader_key += 1
                     st.rerun()
 
-    # Show indexed files separately (persists after rerun)
+    # Show indexed files (persists after rerun)
     if st.session_state.pdf_names:
         st.divider()
         st.markdown("**Indexed files (ready to chat):**")
@@ -154,6 +161,7 @@ with st.sidebar:
             st.session_state.vectorstore = None
             st.session_state.pdf_names = []
             st.session_state.uploaded_files_data = None
+            st.session_state.uploader_key += 1
             st.rerun()
 
     st.divider()
@@ -163,7 +171,7 @@ with st.sidebar:
         "🔵 **General AI** — answer from model knowledge"
     )
 
-# ── Chat ───────────────────────────────────────────────────────────────────────
+# ── Chat ──────────────────────────────────────────────────────────────────────
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])

@@ -5,7 +5,7 @@ from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_groq import ChatGroq
+from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
@@ -13,12 +13,12 @@ from langchain_core.runnables import RunnablePassthrough
 load_dotenv()
 
 # ── Config ───────────────────────────────────────────────────────────────────
-GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
+MISTRAL_API_KEY     = os.getenv("MISTRAL_API_KEY")
 RELEVANCE_THRESHOLD = 0.40
-MODEL_NAME          = "llama3-8b-8192"
+MODEL_NAME          = "mistral-small-latest"   # or "mistral-large-latest"
 EMBED_MODEL         = "sentence-transformers/all-MiniLM-L6-v2"
 
-# ── Prompts ──────────────────────────────────────────────────────────────────
+# ── Prompts ───────────────────────────────────────────────────────────────────
 RAG_PROMPT = ChatPromptTemplate.from_template("""You are a helpful assistant.
 Use ONLY the following document excerpts to answer the question.
 If the answer is clearly present, answer thoroughly.
@@ -56,18 +56,22 @@ def build_vectorstore(text: str) -> FAISS:
     return FAISS.from_documents(chunks, embeddings)
 
 
-def get_llm() -> ChatGroq:
-    return ChatGroq(groq_api_key=GROQ_API_KEY, model_name=MODEL_NAME, temperature=0.3)
+def get_llm() -> ChatMistralAI:
+    return ChatMistralAI(
+        api_key=MISTRAL_API_KEY,
+        model=MODEL_NAME,
+        temperature=0.3,
+    )
 
 
 def format_docs(docs):
     return "\n\n".join(d.page_content for d in docs)
 
 
-def query(question: str, vectorstore: FAISS | None):
+def answer_query(question: str, vectorstore):
     """
     Returns (answer, source_docs, is_from_doc).
-    Uses LCEL chains — no deprecated RetrievalQA.
+    Tries document first; falls back to general AI.
     """
     llm = get_llm()
 
@@ -132,6 +136,7 @@ with st.sidebar:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Render previous messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -149,7 +154,7 @@ if user_query := st.chat_input("Ask a question…"):
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
-            answer, sources, is_from_doc = query(
+            answer, sources, is_from_doc = answer_query(
                 user_query, st.session_state.get("vectorstore")
             )
 

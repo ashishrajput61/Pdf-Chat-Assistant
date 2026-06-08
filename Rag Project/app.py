@@ -2,6 +2,8 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
+from pdf2image import convert_from_bytes
+import pytesseract
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -36,18 +38,62 @@ FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Text Extraction (with OCR fallback) ──────────────────────────────────────
 
-def extract_text(pdf_files) -> str:
+def extract_text_pypdf(pdf_bytes: bytes) -> str:
+    """Try normal text extraction first."""
+    import io
+    reader = PdfReader(io.BytesIO(pdf_bytes))
     text = ""
-    for pdf in pdf_files:
-        reader = PdfReader(pdf)
-        for page in reader.pages:
-            t = page.extract_text()
-            if t:
-                text += t + "\n"
-    return text
+    for page in reader.pages:
+        t = page.extract_text()
+        if t:
+            text += t + "\n"
+    return text.strip()
 
+
+def extract_text_ocr(pdf_bytes: bytes, progress_bar) -> str:
+    """
+    OCR fallback for image-based / slide PDFs.
+    Converts each page to image and runs Tesseract OCR.
+    """
+    images = convert_from_bytes(pdf_bytes, dpi=150)
+    text = ""
+    total = len(images)
+    for i, img in enumerate(images):
+        progress_bar.progress((i + 1) / total, text=f"OCR: page {i+1} of {total}…")
+        page_text = pytesseract.image_to_string(img)
+        if page_text.strip():
+            text += page_text + "\n"
+    return text.strip()
+
+
+def extract_text(pdf_files, progress_bar) -> tuple[str, bool]:
+    """
+    Returns (extracted_text, ocr_was_used).
+    Tries PyPDF2 first; falls back to OCR if no text found.
+    """
+    all_text = ""
+    ocr_used = False
+
+    for pdf in pdf_files:
+        pdf_bytes = pdf.read()
+
+        # Try normal extraction first
+        text = extract_text_pypdf(pdf_bytes)
+
+        if text:
+            all_text += text + "\n"
+        else:
+            # No text layer found → OCR fallback
+            ocr_used = True
+            text = extract_text_ocr(pdf_bytes, progress_bar)
+            all_text += text + "\n"
+
+    return all_text.strip(), ocr_used
+
+
+# ── Vector store & LLM ───────────────────────────────────────────────────────
 
 def build_vectorstore(text: str) -> FAISS:
     splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
@@ -97,7 +143,7 @@ def answer_query(question: str, vectorstore):
     return answer, [], False
 
 
-# ── Session state defaults ────────────────────────────────────────────────────
+# ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "vectorstore" not in st.session_state:
@@ -106,7 +152,6 @@ if "pdf_names" not in st.session_state:
     st.session_state.pdf_names = []
 if "uploaded_files_data" not in st.session_state:
     st.session_state.uploaded_files_data = None
-# uploader_key: incrementing this forces the file_uploader widget to fully reset
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
@@ -118,7 +163,6 @@ st.caption("Answers come from your document when possible, or from AI knowledge 
 with st.sidebar:
     st.header("📁 Upload PDFs")
 
-    # Dynamic key — when incremented, Streamlit treats this as a brand new widget (fully empty)
     uploaded_files = st.file_uploader(
         "Upload one or more PDFs",
         type="pdf",
@@ -126,7 +170,6 @@ with st.sidebar:
         key=f"file_uploader_{st.session_state.uploader_key}",
     )
 
-    # Save to session state as soon as user selects files
     if uploaded_files:
         st.session_state.uploaded_files_data = uploaded_files
 
@@ -138,19 +181,23 @@ with st.sidebar:
             st.markdown(f"- 📄 {f.name}")
 
         if st.button("🔄 Process PDFs"):
+            progress_bar = st.progress(0, text="Starting…")
             with st.spinner("Extracting & indexing…"):
-                raw_text = extract_text(files_to_process)
-                if not raw_text.strip():
-                    st.error("No readable text found in the PDFs.")
+                raw_text, ocr_used = extract_text(files_to_process, progress_bar)
+                progress_bar.empty()
+
+                if not raw_text:
+                    st.error("Could not extract any text from the PDFs.")
                 else:
                     st.session_state.vectorstore = build_vectorstore(raw_text)
                     st.session_state.pdf_names = [f.name for f in files_to_process]
-                    # Clear stored files + bump key so uploader widget resets to empty
+                    if ocr_used:
+                        st.info("ℹ️ OCR was used (image-based PDF detected).")
+                    # Clear uploader
                     st.session_state.uploaded_files_data = None
                     st.session_state.uploader_key += 1
                     st.rerun()
 
-    # Show indexed files (persists after rerun)
     if st.session_state.pdf_names:
         st.divider()
         st.markdown("**Indexed files (ready to chat):**")
